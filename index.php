@@ -74,23 +74,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       $stmt->execute();
       $stmt->close();
 
-      $flash = ['type' => 'success', 'message' => 'Hääletus alustatud. Aega on 5 minutit.'];
+  // Use PRG (Post/Redirect/Get) so the page reloads with fresh session state
+  // and the timer starts immediately without any stale state/caching.
+  header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . '?started=1');
+  exit;
     } catch (Throwable $e) {
       $flash = ['type' => 'error', 'message' => 'Hääletuse alustamine ebaõnnestus.'];
-    }
-
-    // Refresh session state after starting
-    try {
-      $session = load_latest_session($conn);
-      if ($session && !empty($session['h_alguse_aeg'])) {
-        $startTs = strtotime((string)$session['h_alguse_aeg']);
-        if ($startTs !== false) {
-          $sessionEndsAtTs = $startTs + $VOTING_WINDOW_SECONDS;
-          $sessionActive = time() < $sessionEndsAtTs;
-        }
-      }
-    } catch (Throwable $e) {
-      // ignore
     }
   } else {
     $voterId = filter_input(INPUT_POST, 'voter_id', FILTER_VALIDATE_INT);
@@ -171,6 +160,10 @@ try {
 $selectedVoterId = (int)($_POST['voter_id'] ?? 0);
 $selectedOtsus = (string)($_POST['otsus'] ?? '');
 
+if (!$flash && isset($_GET['started'])) {
+  $flash = ['type' => 'success', 'message' => 'Hääletus alustatud. Aega on 5 minutit.'];
+}
+
 ?><!doctype html>
 <html lang="et">
 <head>
@@ -202,9 +195,8 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
         <div class="timer" aria-label="Taimer">
           <div class="timer-label">Aega jäänud</div>
           <div id="timer-value" class="timer-value">--:--</div>
-          <?php if ($sessionEndsAtTs): ?>
-            <div id="timer-bar" class="timer-bar" style="--p: 0%;"></div>
-          <?php else: ?>
+          <div id="timer-bar" class="timer-bar" style="--p: 0%;"></div>
+          <?php if (!$sessionEndsAtTs): ?>
             <div class="small">Alusta hääletust, et taimer käivituks.</div>
           <?php endif; ?>
         </div>
@@ -302,6 +294,7 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
   <script>
     (function () {
       const endsAt = <?= $sessionEndsAtTs ? (int)$sessionEndsAtTs : 'null' ?>;
+  const isActive = <?= $sessionActive ? 'true' : 'false' ?>;
       const windowSeconds = <?= (int)$VOTING_WINDOW_SECONDS ?>;
       const el = document.getElementById('timer-value');
       const bar = document.getElementById('timer-bar');
@@ -311,7 +304,12 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
       }
 
       function tick() {
-        if (!endsAt || !el) return;
+        if (!el) return;
+        if (!endsAt) {
+          el.textContent = '--:--';
+          if (bar) bar.style.setProperty('--p', '0%');
+          return;
+        }
         const now = Math.floor(Date.now() / 1000);
         let remaining = endsAt - now;
         if (remaining < 0) remaining = 0;
@@ -336,7 +334,10 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
         }
       }
 
-      tick();
+  // If server says session is active, start ticking immediately.
+  // If not active, still render a stable UI.
+  if (isActive) tick();
+  else tick();
     })();
   </script>
 </body>
