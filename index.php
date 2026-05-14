@@ -21,7 +21,11 @@ function h(string $s): string {
  * Returns associative array with keys: id, h_alguse_aeg, osalejate_arv, poolt, vastu
  */
 function load_latest_session(mysqli $conn): ?array {
-  $result = $conn->query('SELECT id, h_alguse_aeg, osalejate_arv, poolt, vastu FROM TULEMUSED ORDER BY id DESC LIMIT 1');
+  // Fetch h_alguse_aeg also as a UNIX timestamp to avoid timezone/format parsing issues.
+  $result = $conn->query(
+    'SELECT id, h_alguse_aeg, UNIX_TIMESTAMP(h_alguse_aeg) AS h_alguse_ts, osalejate_arv, poolt, vastu '
+    . 'FROM TULEMUSED ORDER BY id DESC LIMIT 1'
+  );
   $row = $result->fetch_assoc();
   return $row ?: null;
 }
@@ -57,8 +61,8 @@ $debugInfo = [];
 try {
   $session = load_latest_session($conn);
   if ($session && !empty($session['h_alguse_aeg'])) {
-    $startTs = strtotime((string)$session['h_alguse_aeg']);
-    if ($startTs !== false) {
+    $startTs = isset($session['h_alguse_ts']) ? (int)$session['h_alguse_ts'] : 0;
+    if ($startTs > 0) {
       $sessionEndsAtTs = $startTs + $VOTING_WINDOW_SECONDS;
       $sessionActive = time() < $sessionEndsAtTs;
     }
