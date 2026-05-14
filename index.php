@@ -23,7 +23,7 @@ function h(string $s): string {
 function load_latest_session(mysqli $conn): ?array {
   // Fetch h_alguse_aeg also as a UNIX timestamp to avoid timezone/format parsing issues.
   $result = $conn->query(
-    'SELECT id, h_alguse_aeg, UNIX_TIMESTAMP(h_alguse_aeg) AS h_alguse_ts, osalejate_arv, poolt, vastu '
+  'SELECT id, h_alguse_aeg, UNIX_TIMESTAMP(h_alguse_aeg) AS h_alguse_ts, kokku_arv, poolt_arv, vastu_arv '
     . 'FROM TULEMUSED ORDER BY id DESC LIMIT 1'
   );
   $row = $result->fetch_assoc();
@@ -46,7 +46,7 @@ function update_session_totals(mysqli $conn, int $sessionId): void {
   $poolt = (int)($counts['poolt'] ?? 0);
   $vastu = (int)($counts['vastu'] ?? 0);
 
-  $stmt = $conn->prepare('UPDATE TULEMUSED SET osalejate_arv = ?, poolt = ?, vastu = ? WHERE id = ?');
+  $stmt = $conn->prepare('UPDATE TULEMUSED SET kokku_arv = ?, poolt_arv = ?, vastu_arv = ? WHERE id = ?');
   $stmt->bind_param('iiii', $osalejate, $poolt, $vastu, $sessionId);
   $stmt->execute();
   $stmt->close();
@@ -96,10 +96,37 @@ if ($debug) {
 
 // Handle vote submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+  // Reset/start voting (aligns with DB structure: `poolt_arv`, `vastu_arv`, `kokku_arv`)
+  if (isset($_POST['alusta_uuesti'])) {
+    try {
+      // NOTE: This assumes there's a row with id=1 in TULEMUSED (as in your phpMyAdmin script).
+      $stmt = $conn->prepare('UPDATE TULEMUSED SET h_alguse_aeg = NOW(), poolt_arv = 0, vastu_arv = 0, kokku_arv = 0 WHERE id = 1');
+      $stmt->execute();
+      $stmt->close();
+
+      // Clear individual votes + log
+      $conn->query('UPDATE HAALETUS SET otsus = NULL');
+      try {
+        $conn->query('TRUNCATE TABLE LOGI');
+      } catch (Throwable $e) {
+        // ignore if no permission
+      }
+
+      header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . '?started=1');
+      exit;
+    } catch (mysqli_sql_exception $e) {
+      $flash = ['type' => 'error', 'message' => 'Hääletuse alustamine ebaõnnestus: ' . $e->getMessage()];
+    } catch (Throwable $e) {
+      $flash = ['type' => 'error', 'message' => 'Hääletuse alustamine ebaõnnestus.'];
+    }
+  }
+
   // Start voting button
   if (isset($_POST['start_voting'])) {
     try {
-      $stmt = $conn->prepare('INSERT INTO TULEMUSED (h_alguse_aeg, osalejate_arv, poolt, vastu) VALUES (NOW(), 0, 0, 0)');
+      // If your DB is using a single row (id=1) mode, use the reset/start button instead.
+      // This path inserts a new session row (requires fields: h_alguse_aeg, kokku_arv, poolt_arv, vastu_arv).
+      $stmt = $conn->prepare('INSERT INTO TULEMUSED (h_alguse_aeg, kokku_arv, poolt_arv, vastu_arv) VALUES (NOW(), 0, 0, 0)');
       $stmt->execute();
       $stmt->close();
 
@@ -184,7 +211,10 @@ $score = ['osalejate_arv' => 0, 'poolt' => 0, 'vastu' => 0, 'h_alguse_aeg' => nu
 try {
   $latest = load_latest_session($conn);
   if ($latest) {
-    $score = array_merge($score, $latest);
+  $score['h_alguse_aeg'] = $latest['h_alguse_aeg'] ?? null;
+  $score['osalejate_arv'] = (int)($latest['kokku_arv'] ?? 0);
+  $score['poolt'] = (int)($latest['poolt_arv'] ?? 0);
+  $score['vastu'] = (int)($latest['vastu_arv'] ?? 0);
   }
 } catch (Throwable $e) {
   // Keep defaults
@@ -235,8 +265,8 @@ if (!$flash && isset($_GET['started'])) {
         </div>
 
         <form method="post" action="" class="start-form">
-          <button type="submit" name="start_voting" value="1" <?= $sessionActive ? 'disabled' : '' ?>>Alusta hääletust (5 min)</button>
-          <div class="small">Käivitab uue hääletuse ja avab 5 minuti akna.</div>
+          <button type="submit" name="alusta_uuesti" value="1" <?= $sessionActive ? 'disabled' : '' ?>>Alusta hääletust (5 min)</button>
+          <div class="small">Resetib tulemused (id=1) ja avab 5 minuti akna.</div>
         </form>
       </div>
 
