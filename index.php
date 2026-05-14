@@ -66,16 +66,24 @@ try {
     // Leave empty; UI will show message
 }
 
-// Fetch latest scoreboard row
+// Live scoreboard: calculate directly from HAALETUS so it updates immediately after voting.
+// (The TULEMUSED table can still exist for reporting, but the UI won't depend on it.)
 $score = ['osalejate_arv' => 0, 'poolt' => 0, 'vastu' => 0, 'h_alguse_aeg' => null];
 try {
-    $result = $conn->query('SELECT h_alguse_aeg, osalejate_arv, poolt, vastu FROM TULEMUSED ORDER BY id DESC LIMIT 1');
-    $r = $result->fetch_assoc();
-    if ($r) {
-        $score = array_merge($score, $r);
-    }
+  $result = $conn->query(
+    "SELECT\n"
+    . "  SUM(CASE WHEN otsus IN ('poolt','vastu') THEN 1 ELSE 0 END) AS osalejate_arv,\n"
+    . "  SUM(CASE WHEN otsus = 'poolt' THEN 1 ELSE 0 END) AS poolt,\n"
+    . "  SUM(CASE WHEN otsus = 'vastu' THEN 1 ELSE 0 END) AS vastu\n"
+    . "FROM HAALETUS"
+  );
+  $r = $result->fetch_assoc();
+  if ($r) {
+    $score = array_merge($score, $r);
+    $score['h_alguse_aeg'] = date('Y-m-d H:i:s');
+  }
 } catch (Throwable $e) {
-    // Keep defaults
+  // Keep defaults
 }
 
 $selectedVoterId = (int)($_POST['voter_id'] ?? 0);
@@ -170,7 +178,7 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
         <?php if (!empty($score['h_alguse_aeg'])): ?>
           Viimane seisu uuendus: <?= h((string)$score['h_alguse_aeg']) ?>
         <?php else: ?>
-          Seisu allikas: tabel `TULEMUSED` (viimane rida).
+          Seis arvutatakse live tabelist `HAALETUS`.
         <?php endif; ?>
       </div>
     </div>
