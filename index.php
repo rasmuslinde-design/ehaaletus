@@ -52,6 +52,8 @@ function update_session_totals(mysqli $conn, int $sessionId): void {
 $session = null;
 $sessionActive = false;
 $sessionEndsAtTs = null;
+$debug = isset($_GET['debug']) && $_GET['debug'] === '1';
+$debugInfo = [];
 try {
   $session = load_latest_session($conn);
   if ($session && !empty($session['h_alguse_aeg'])) {
@@ -63,6 +65,16 @@ try {
   }
 } catch (Throwable $e) {
   // session remains null
+}
+
+if ($debug) {
+  $debugInfo['php_time'] = date('Y-m-d H:i:s');
+  $debugInfo['php_time_ts'] = time();
+  $debugInfo['window_seconds'] = $VOTING_WINDOW_SECONDS;
+  $debugInfo['session_row'] = $session;
+  $debugInfo['sessionEndsAtTs'] = $sessionEndsAtTs;
+  $debugInfo['sessionEndsAt'] = $sessionEndsAtTs ? date('Y-m-d H:i:s', (int)$sessionEndsAtTs) : null;
+  $debugInfo['sessionActive'] = $sessionActive;
 }
 
 // Handle vote submission
@@ -254,6 +266,13 @@ if (!$flash && isset($_GET['started'])) {
         <?php if ($flash): ?>
           <div class="notice <?= h($flash['type']) ?>" role="status">
             <?= h($flash['message']) ?>
+          </div>
+        <?php endif; ?>
+
+        <?php if ($debug): ?>
+          <div class="notice" style="margin-top:12px; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">
+            DEBUG (?debug=1)
+            <?= h(print_r($debugInfo, true)) ?>
           </div>
         <?php endif; ?>
       </form>
