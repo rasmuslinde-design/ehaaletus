@@ -144,6 +144,70 @@ legend {
   align-items: center;
 }
 
+.session {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.18);
+  margin-bottom: 14px;
+}
+
+@media (min-width: 760px) {
+  .session {
+    grid-template-columns: 1.2fr 1fr 1.2fr;
+    align-items: center;
+  }
+}
+
+.session-title {
+  font-weight: 900;
+  letter-spacing: 0.2px;
+}
+
+.session-sub {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.timer {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.timer-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.timer-value {
+  font-size: 28px;
+  font-weight: 900;
+  margin-top: 4px;
+}
+
+.timer-bar {
+  height: 8px;
+  margin-top: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: linear-gradient(
+    90deg,
+    var(--accent) var(--p),
+    rgba(255, 255, 255, 0.06) var(--p)
+  );
+}
+
+.start-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 button {
   border: 0;
   background: var(--accent);
@@ -152,6 +216,12 @@ button {
   padding: 12px 14px;
   border-radius: 12px;
   cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  filter: grayscale(0.2);
 }
 
 button:hover {

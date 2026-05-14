@@ -9,17 +9,98 @@ require_once __DIR__ . '/db.php';
 
 $flash = null; // ['type' => 'success'|'error', 'message' => string]
 
+// Voting window length (seconds)
+$VOTING_WINDOW_SECONDS = 5 * 60;
+
 function h(string $s): string {
     return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+/**
+ * Loads the latest voting session from TULEMUSED.
+ * Returns associative array with keys: id, h_alguse_aeg, osalejate_arv, poolt, vastu
+ */
+function load_latest_session(mysqli $conn): ?array {
+  $result = $conn->query('SELECT id, h_alguse_aeg, osalejate_arv, poolt, vastu FROM TULEMUSED ORDER BY id DESC LIMIT 1');
+  $row = $result->fetch_assoc();
+  return $row ?: null;
+}
+
+/**
+ * Recalculates session totals from HAALETUS (live counts) and writes them into TULEMUSED row.
+ */
+function update_session_totals(mysqli $conn, int $sessionId): void {
+  $res = $conn->query(
+    "SELECT\n"
+    . "  SUM(CASE WHEN otsus IN ('poolt','vastu') THEN 1 ELSE 0 END) AS osalejate_arv,\n"
+    . "  SUM(CASE WHEN otsus = 'poolt' THEN 1 ELSE 0 END) AS poolt,\n"
+    . "  SUM(CASE WHEN otsus = 'vastu' THEN 1 ELSE 0 END) AS vastu\n"
+    . "FROM HAALETUS"
+  );
+  $counts = $res->fetch_assoc() ?: ['osalejate_arv' => 0, 'poolt' => 0, 'vastu' => 0];
+  $osalejate = (int)($counts['osalejate_arv'] ?? 0);
+  $poolt = (int)($counts['poolt'] ?? 0);
+  $vastu = (int)($counts['vastu'] ?? 0);
+
+  $stmt = $conn->prepare('UPDATE TULEMUSED SET osalejate_arv = ?, poolt = ?, vastu = ? WHERE id = ?');
+  $stmt->bind_param('iiii', $osalejate, $poolt, $vastu, $sessionId);
+  $stmt->execute();
+  $stmt->close();
+}
+
+// Load current voting session state
+$session = null;
+$sessionActive = false;
+$sessionEndsAtTs = null;
+try {
+  $session = load_latest_session($conn);
+  if ($session && !empty($session['h_alguse_aeg'])) {
+    $startTs = strtotime((string)$session['h_alguse_aeg']);
+    if ($startTs !== false) {
+      $sessionEndsAtTs = $startTs + $VOTING_WINDOW_SECONDS;
+      $sessionActive = time() < $sessionEndsAtTs;
+    }
+  }
+} catch (Throwable $e) {
+  // session remains null
+}
+
 // Handle vote submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+  // Start voting button
+  if (isset($_POST['start_voting'])) {
+    try {
+      $stmt = $conn->prepare('INSERT INTO TULEMUSED (h_alguse_aeg, osalejate_arv, poolt, vastu) VALUES (NOW(), 0, 0, 0)');
+      $stmt->execute();
+      $stmt->close();
+
+      $flash = ['type' => 'success', 'message' => 'Hääletus alustatud. Aega on 5 minutit.'];
+    } catch (Throwable $e) {
+      $flash = ['type' => 'error', 'message' => 'Hääletuse alustamine ebaõnnestus.'];
+    }
+
+    // Refresh session state after starting
+    try {
+      $session = load_latest_session($conn);
+      if ($session && !empty($session['h_alguse_aeg'])) {
+        $startTs = strtotime((string)$session['h_alguse_aeg']);
+        if ($startTs !== false) {
+          $sessionEndsAtTs = $startTs + $VOTING_WINDOW_SECONDS;
+          $sessionActive = time() < $sessionEndsAtTs;
+        }
+      }
+    } catch (Throwable $e) {
+      // ignore
+    }
+  } else {
     $voterId = filter_input(INPUT_POST, 'voter_id', FILTER_VALIDATE_INT);
     $otsusRaw = (string)($_POST['otsus'] ?? '');
     $otsus = in_array($otsusRaw, ['poolt', 'vastu'], true) ? $otsusRaw : null;
 
-    if (!$voterId || !$otsus) {
+  // Enforce active session server-side (prevents DB changes after 5 minutes)
+  if (!$sessionActive) {
+    $flash = ['type' => 'error', 'message' => 'Hääletus ei ole aktiivne või aeg on läbi.'];
+  } elseif (!$voterId || !$otsus) {
         $flash = ['type' => 'error', 'message' => 'Palun vali nimi ja otsus (poolt/vastu).'];
     } else {
         try {
@@ -49,10 +130,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $flash = ['type' => 'success', 'message' => 'Hääl salvestatud.'];
+
+      // Keep TULEMUSED in sync for the live scoreboard
+      if ($session && isset($session['id'])) {
+        try {
+          update_session_totals($conn, (int)$session['id']);
+        } catch (Throwable $e) {
+          // ignore
+        }
+      }
         } catch (Throwable $e) {
             $flash = ['type' => 'error', 'message' => 'Midagi läks valesti hääle salvestamisel.'];
         }
     }
+  }
 }
 
 // Fetch voters (11)
@@ -66,21 +157,12 @@ try {
     // Leave empty; UI will show message
 }
 
-// Live scoreboard: calculate directly from HAALETUS so it updates immediately after voting.
-// (The TULEMUSED table can still exist for reporting, but the UI won't depend on it.)
+// Scoreboard: show results from latest session row in TULEMUSED
 $score = ['osalejate_arv' => 0, 'poolt' => 0, 'vastu' => 0, 'h_alguse_aeg' => null];
 try {
-  $result = $conn->query(
-    "SELECT\n"
-    . "  SUM(CASE WHEN otsus IN ('poolt','vastu') THEN 1 ELSE 0 END) AS osalejate_arv,\n"
-    . "  SUM(CASE WHEN otsus = 'poolt' THEN 1 ELSE 0 END) AS poolt,\n"
-    . "  SUM(CASE WHEN otsus = 'vastu' THEN 1 ELSE 0 END) AS vastu\n"
-    . "FROM HAALETUS"
-  );
-  $r = $result->fetch_assoc();
-  if ($r) {
-    $score = array_merge($score, $r);
-    $score['h_alguse_aeg'] = date('Y-m-d H:i:s');
+  $latest = load_latest_session($conn);
+  if ($latest) {
+    $score = array_merge($score, $latest);
   }
 } catch (Throwable $e) {
   // Keep defaults
@@ -105,6 +187,34 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
     </div>
 
     <div class="card">
+      <div class="session">
+        <div>
+          <div class="session-title">Hääletuse staatus</div>
+          <div class="session-sub">
+            <?php if ($sessionActive): ?>
+              Hääletus on aktiivne.
+            <?php else: ?>
+              Hääletus ei ole aktiivne.
+            <?php endif; ?>
+          </div>
+        </div>
+
+        <div class="timer" aria-label="Taimer">
+          <div class="timer-label">Aega jäänud</div>
+          <div id="timer-value" class="timer-value">--:--</div>
+          <?php if ($sessionEndsAtTs): ?>
+            <div id="timer-bar" class="timer-bar" style="--p: 0%;"></div>
+          <?php else: ?>
+            <div class="small">Alusta hääletust, et taimer käivituks.</div>
+          <?php endif; ?>
+        </div>
+
+        <form method="post" action="" class="start-form">
+          <button type="submit" name="start_voting" value="1" <?= $sessionActive ? 'disabled' : '' ?>>Alusta hääletust (5 min)</button>
+          <div class="small">Käivitab uue hääletuse ja avab 5 minuti akna.</div>
+        </form>
+      </div>
+
       <form method="post" action="">
         <div class="row">
           <div>
@@ -115,7 +225,8 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
                 $id = (int)$v['id'];
                 $name = trim(($v['eesnimi'] ?? '') . ' ' . ($v['perenimi'] ?? ''));
                 $current = (string)($v['otsus'] ?? '');
-                $suffix = $current ? " (praegu: {$current})" : '';
+                // Kuvame hetkevaliku ainult siis, kui otsus on olemas (poolt/vastu)
+                $suffix = $current !== '' ? " (Valik: {$current})" : '';
               ?>
                 <option value="<?= $id ?>" <?= $selectedVoterId === $id ? 'selected' : '' ?>><?= h($name . $suffix) ?></option>
               <?php endforeach; ?>
@@ -144,7 +255,7 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
         </div>
 
         <div class="actions">
-          <button type="submit">Salvesta hääl</button>
+          <button type="submit" <?= $sessionActive ? '' : 'disabled' ?>>Salvesta hääl</button>
           <span class="small">Andmed salvestatakse tabelisse `HAALETUS`.</span>
         </div>
 
@@ -178,7 +289,7 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
         <?php if (!empty($score['h_alguse_aeg'])): ?>
           Viimane seisu uuendus: <?= h((string)$score['h_alguse_aeg']) ?>
         <?php else: ?>
-          Seis arvutatakse live tabelist `HAALETUS`.
+          Seisu allikas: tabel `TULEMUSED` (viimane rida).
         <?php endif; ?>
       </div>
     </div>
@@ -187,5 +298,46 @@ $selectedOtsus = (string)($_POST['otsus'] ?? '');
       <div class="small">Nipp: cPanelis pane samad ühenduse andmed ka `db.php` failis või kasuta keskkonnamuutujaid (DB_HOST/DB_NAME/DB_USER/DB_PASS).</div>
     </div>
   </div>
+
+  <script>
+    (function () {
+      const endsAt = <?= $sessionEndsAtTs ? (int)$sessionEndsAtTs : 'null' ?>;
+      const windowSeconds = <?= (int)$VOTING_WINDOW_SECONDS ?>;
+      const el = document.getElementById('timer-value');
+      const bar = document.getElementById('timer-bar');
+
+      function pad(n) {
+        return String(n).padStart(2, '0');
+      }
+
+      function tick() {
+        if (!endsAt || !el) return;
+        const now = Math.floor(Date.now() / 1000);
+        let remaining = endsAt - now;
+        if (remaining < 0) remaining = 0;
+
+        const mm = Math.floor(remaining / 60);
+        const ss = remaining % 60;
+        el.textContent = pad(mm) + ':' + pad(ss);
+
+        if (bar) {
+          const p = Math.max(0, Math.min(1, remaining / windowSeconds));
+          bar.style.setProperty('--p', Math.round(p * 100) + '%');
+        }
+
+        if (remaining === 0) {
+          // Session ended: show 00:00 and disable voting until refresh.
+          const buttons = document.querySelectorAll('form button[type="submit"]');
+          buttons.forEach((b) => {
+            if (b.name !== 'start_voting') b.disabled = true;
+          });
+        } else {
+          setTimeout(tick, 250);
+        }
+      }
+
+      tick();
+    })();
+  </script>
 </body>
 </html>
