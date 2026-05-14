@@ -19,10 +19,10 @@ $DB_NAME = getenv('DB_NAME') ?: 'vso25polluste_haaletussysteem';
 // Näited (asenda enda omadega):
 //   DB_NAME = vso25polluste_haaletussysteem
 //   DB_USER = vso25polluste_mysqlkasutaja
-$DB_USER = getenv('DB_USER') ?: 'vso25polluste_MYSQL_USER';
+$DB_USER = getenv('DB_USER') ?: 'vso25polluste_vso25';
 
 // Parool peab olema täpselt see, mis MySQL kasutajat tehes pandi.
-$DB_PASS = getenv('DB_PASS') ?: 'PASTE_MYSQL_PASSWORD_HERE';
+$DB_PASS = getenv('DB_PASS') ?: 'Mannikabi14';
 
 try {
     $conn = new mysqli($DB_HOST, $DB_USER, $DB_PASS, $DB_NAME);
