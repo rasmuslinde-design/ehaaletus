@@ -23,7 +23,7 @@ function h(string $s): string {
 function load_latest_session(mysqli $conn): ?array {
   // Fetch h_alguse_aeg also as a UNIX timestamp to avoid timezone/format parsing issues.
   $result = $conn->query(
-  'SELECT id, h_alguse_aeg, UNIX_TIMESTAMP(h_alguse_aeg) AS h_alguse_ts, kokku_arv, poolt_arv, vastu_arv '
+  'SELECT id, h_alguse_aeg, UNIX_TIMESTAMP(h_alguse_aeg) AS h_alguse_ts, kokku_arv, poolt_arv, vastu_arv, osalejate_arv '
     . 'FROM TULEMUSED ORDER BY id DESC LIMIT 1'
   );
   $row = $result->fetch_assoc();
@@ -46,8 +46,8 @@ function update_session_totals(mysqli $conn, int $sessionId): void {
   $poolt = (int)($counts['poolt'] ?? 0);
   $vastu = (int)($counts['vastu'] ?? 0);
 
-  $stmt = $conn->prepare('UPDATE TULEMUSED SET kokku_arv = ?, poolt_arv = ?, vastu_arv = ? WHERE id = ?');
-  $stmt->bind_param('iiii', $osalejate, $poolt, $vastu, $sessionId);
+  $stmt = $conn->prepare('UPDATE TULEMUSED SET kokku_arv = ?, poolt_arv = ?, vastu_arv = ?, osalejate_arv = ? WHERE id = ?');
+  $stmt->bind_param('iiiii', $osalejate, $poolt, $vastu, $osalejate, $sessionId);
   $stmt->execute();
   $stmt->close();
 }
@@ -100,7 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   if (isset($_POST['alusta_uuesti'])) {
     try {
       // NOTE: This assumes there's a row with id=1 in TULEMUSED (as in your phpMyAdmin script).
-      $stmt = $conn->prepare('UPDATE TULEMUSED SET h_alguse_aeg = NOW(), poolt_arv = 0, vastu_arv = 0, kokku_arv = 0 WHERE id = 1');
+  $stmt = $conn->prepare('UPDATE TULEMUSED SET h_alguse_aeg = NOW(), poolt_arv = 0, vastu_arv = 0, kokku_arv = 0, osalejate_arv = 0 WHERE id = 1');
       $stmt->execute();
       $stmt->close();
 
@@ -183,6 +183,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       // Keep TULEMUSED in sync for the live scoreboard
       if ($session && isset($session['id'])) {
         try {
+          // This keeps phpMyAdmin view consistent even when someone changes their vote.
           update_session_totals($conn, (int)$session['id']);
         } catch (Throwable $e) {
           // ignore
@@ -212,7 +213,8 @@ try {
   $latest = load_latest_session($conn);
   if ($latest) {
   $score['h_alguse_aeg'] = $latest['h_alguse_aeg'] ?? null;
-  $score['osalejate_arv'] = (int)($latest['kokku_arv'] ?? 0);
+  // Prefer explicit osalejate_arv if present, otherwise fall back to kokku_arv
+  $score['osalejate_arv'] = (int)($latest['osalejate_arv'] ?? ($latest['kokku_arv'] ?? 0));
   $score['poolt'] = (int)($latest['poolt_arv'] ?? 0);
   $score['vastu'] = (int)($latest['vastu_arv'] ?? 0);
   }
@@ -375,7 +377,8 @@ if (!$flash && isset($_GET['started'])) {
 
       function tick() {
         if (!el) return;
-        if (!endsAt) {
+  // Only run timer when the session is active.
+  if (!isActive || !endsAt) {
           el.textContent = '--:--';
           if (bar) bar.style.setProperty('--p', '0%');
           return;
@@ -404,10 +407,7 @@ if (!$flash && isset($_GET['started'])) {
         }
       }
 
-  // If server says session is active, start ticking immediately.
-  // If not active, still render a stable UI.
-  if (isActive) tick();
-  else tick();
+  tick();
     })();
   </script>
 </body>
