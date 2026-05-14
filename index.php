@@ -209,21 +209,30 @@ try {
 
 // Scoreboard: show results from latest session row in TULEMUSED
 $score = ['osalejate_arv' => 0, 'poolt' => 0, 'vastu' => 0, 'h_alguse_aeg' => null];
-try {
-  $latest = load_latest_session($conn);
-  if ($latest) {
-  $score['h_alguse_aeg'] = $latest['h_alguse_aeg'] ?? null;
-  // Prefer explicit osalejate_arv if present, otherwise fall back to kokku_arv
-  $score['osalejate_arv'] = (int)($latest['osalejate_arv'] ?? ($latest['kokku_arv'] ?? 0));
-  $score['poolt'] = (int)($latest['poolt_arv'] ?? 0);
-  $score['vastu'] = (int)($latest['vastu_arv'] ?? 0);
+// Outside an active session we show a clean 0-state (no old results shown).
+if ($sessionActive) {
+  try {
+    $latest = load_latest_session($conn);
+    if ($latest) {
+      $score['h_alguse_aeg'] = $latest['h_alguse_aeg'] ?? null;
+      // Prefer explicit osalejate_arv if present, otherwise fall back to kokku_arv
+      $score['osalejate_arv'] = (int)($latest['osalejate_arv'] ?? ($latest['kokku_arv'] ?? 0));
+      $score['poolt'] = (int)($latest['poolt_arv'] ?? 0);
+      $score['vastu'] = (int)($latest['vastu_arv'] ?? 0);
+    }
+  } catch (Throwable $e) {
+    // Keep defaults
   }
-} catch (Throwable $e) {
-  // Keep defaults
 }
 
 $selectedVoterId = (int)($_POST['voter_id'] ?? 0);
 $selectedOtsus = (string)($_POST['otsus'] ?? '');
+
+// On normal page load/refresh (GET), don't preselect any person or vote.
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+  $selectedVoterId = 0;
+  $selectedOtsus = '';
+}
 
 if (!$flash && isset($_GET['started'])) {
   $flash = ['type' => 'success', 'message' => 'Hääletus alustatud. Aega on 5 minutit.'];
