@@ -75,6 +75,19 @@ if ($debug) {
   $debugInfo['php_time'] = date('Y-m-d H:i:s');
   $debugInfo['php_time_ts'] = time();
   $debugInfo['window_seconds'] = $VOTING_WINDOW_SECONDS;
+  // Quick DB capability checks for TULEMUSED (SELECT + INSERT)
+  try {
+    $conn->query('SELECT 1 FROM TULEMUSED LIMIT 1');
+    $debugInfo['db_select_tulemused'] = 'OK';
+  } catch (Throwable $e) {
+    $debugInfo['db_select_tulemused'] = 'FAIL: ' . $e->getMessage();
+  }
+  try {
+    $conn->query('SELECT NOW() AS now');
+    $debugInfo['db_now'] = 'OK';
+  } catch (Throwable $e) {
+    $debugInfo['db_now'] = 'FAIL: ' . $e->getMessage();
+  }
   $debugInfo['session_row'] = $session;
   $debugInfo['sessionEndsAtTs'] = $sessionEndsAtTs;
   $debugInfo['sessionEndsAt'] = $sessionEndsAtTs ? date('Y-m-d H:i:s', (int)$sessionEndsAtTs) : null;
@@ -94,8 +107,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   // and the timer starts immediately without any stale state/caching.
   header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . '?started=1');
   exit;
+    } catch (mysqli_sql_exception $e) {
+      // Show a helpful DB error (does not include credentials).
+      // Common causes: missing INSERT permission, table/column mismatch.
+      $flash = ['type' => 'error', 'message' => 'Hääletuse alustamine ebaõnnestus: ' . $e->getMessage()];
     } catch (Throwable $e) {
-      $flash = ['type' => 'error', 'message' => 'Hääletuse alustamine ebaõnnestus.'];
+      $flash = ['type' => 'error', 'message' => 'Hääletuse alustamine ebaõnnestus.' ];
     }
   } else {
     $voterId = filter_input(INPUT_POST, 'voter_id', FILTER_VALIDATE_INT);
