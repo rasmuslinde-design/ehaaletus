@@ -31,6 +31,19 @@ function load_latest_session(mysqli $conn): ?array {
 }
 
 /**
+ * Loads the single active session row (id=1).
+ * This matches the cPanel/phpMyAdmin setup where TULEMUSED is a single-row table.
+ */
+function load_session_row(mysqli $conn): ?array {
+  $result = $conn->query(
+    'SELECT id, h_alguse_aeg, UNIX_TIMESTAMP(h_alguse_aeg) AS h_alguse_ts, kokku_arv, poolt_arv, vastu_arv, osalejate_arv '
+    . 'FROM TULEMUSED WHERE id = 1 LIMIT 1'
+  );
+  $row = $result->fetch_assoc();
+  return $row ?: null;
+}
+
+/**
  * Recalculates session totals from HAALETUS (live counts) and writes them into TULEMUSED row.
  */
 function update_session_totals(mysqli $conn, int $sessionId): void {
@@ -71,7 +84,8 @@ $sessionEndsAtTs = null;
 $debug = isset($_GET['debug']) && $_GET['debug'] === '1';
 $debugInfo = [];
 try {
-  $session = load_latest_session($conn);
+  // We operate in single-row mode (id=1).
+  $session = load_session_row($conn);
   if ($session && !empty($session['h_alguse_aeg'])) {
     $startTs = isset($session['h_alguse_ts']) ? (int)$session['h_alguse_ts'] : 0;
     if ($startTs > 0) {
@@ -214,13 +228,13 @@ $score = ['osalejate_arv' => 0, 'poolt' => 0, 'vastu' => 0, 'h_alguse_aeg' => nu
 // Outside an active session we show a clean 0-state (no old results shown).
 if ($sessionActive) {
   try {
-    $latest = load_latest_session($conn);
-    if ($latest) {
-      $score['h_alguse_aeg'] = $latest['h_alguse_aeg'] ?? null;
+    $s = load_session_row($conn);
+    if ($s) {
+      $score['h_alguse_aeg'] = $s['h_alguse_aeg'] ?? null;
       // Prefer explicit osalejate_arv if present, otherwise fall back to kokku_arv
-      $score['osalejate_arv'] = (int)($latest['osalejate_arv'] ?? ($latest['kokku_arv'] ?? 0));
-      $score['poolt'] = (int)($latest['poolt_arv'] ?? 0);
-      $score['vastu'] = (int)($latest['vastu_arv'] ?? 0);
+      $score['osalejate_arv'] = (int)($s['osalejate_arv'] ?? ($s['kokku_arv'] ?? 0));
+      $score['poolt'] = (int)($s['poolt_arv'] ?? 0);
+      $score['vastu'] = (int)($s['vastu_arv'] ?? 0);
     }
   } catch (Throwable $e) {
     // Keep defaults
