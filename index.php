@@ -134,11 +134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
       // Clear individual votes + log
       $conn->query('UPDATE HAALETUS SET otsus = NULL');
-      try {
-        $conn->query('TRUNCATE TABLE LOGI');
-      } catch (Throwable $e) {
-        // ignore if no permission
-      }
+  // Keep LOGI history across sessions (do not truncate).
 
       // Make sure totals are consistent immediately after reset
       try {
@@ -185,14 +181,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->close();
 
             // Optional: log changes (won't fail the whole request if LOGI is missing perms)
-            try {
-                $stmt = $conn->prepare('INSERT INTO LOGI (haaletaja_id, vana_otsus, uus_otsus, muutmise_aeg) VALUES (?, ?, ?, NOW())');
-                $stmt->bind_param('iss', $voterId, $old, $otsus);
-                $stmt->execute();
-                $stmt->close();
-            } catch (Throwable $e) {
-                // ignore
-            }
+      try {
+        // LOGI schema (per your original DB): id, haaletaja_id, vana_otsus, uus_otsus, muutmise_aeg
+        // We log every successful vote save.
+        $oldStr = $old === null || $old === '' ? 'puudub' : (string)$old;
+        $stmt = $conn->prepare('INSERT INTO LOGI (haaletaja_id, vana_otsus, uus_otsus, muutmise_aeg) VALUES (?, ?, ?, NOW())');
+        $stmt->bind_param('iss', $voterId, $oldStr, $otsus);
+        $stmt->execute();
+        $stmt->close();
+      } catch (Throwable $e) {
+        if ($debug) {
+          $debugInfo['logi_insert'] = 'FAIL: ' . $e->getMessage();
+        }
+      }
 
             $flash = ['type' => 'success', 'message' => 'Hääl salvestatud.'];
 
