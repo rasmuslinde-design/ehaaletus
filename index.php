@@ -52,6 +52,18 @@ function update_session_totals(mysqli $conn, int $sessionId): void {
   $stmt->close();
 }
 
+/**
+ * Ensures a single session row exists (id=1). Creates it if missing.
+ */
+function ensure_session_row(mysqli $conn): void {
+  $res = $conn->query('SELECT id FROM TULEMUSED WHERE id = 1 LIMIT 1');
+  $row = $res->fetch_assoc();
+  if ($row) return;
+
+  // Create a default row (values will be overwritten when starting a vote)
+  $conn->query("INSERT INTO TULEMUSED (id, h_alguse_aeg, poolt_arv, vastu_arv, kokku_arv, osalejate_arv) VALUES (1, NOW(), 0, 0, 0, 0)");
+}
+
 // Load current voting session state
 $session = null;
 $sessionActive = false;
@@ -99,6 +111,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   // Reset/start voting (aligns with DB structure: `poolt_arv`, `vastu_arv`, `kokku_arv`)
   if (isset($_POST['alusta_uuesti'])) {
     try {
+  ensure_session_row($conn);
+
       // NOTE: This assumes there's a row with id=1 in TULEMUSED (as in your phpMyAdmin script).
   $stmt = $conn->prepare('UPDATE TULEMUSED SET h_alguse_aeg = NOW(), poolt_arv = 0, vastu_arv = 0, kokku_arv = 0, osalejate_arv = 0 WHERE id = 1');
       $stmt->execute();
@@ -112,6 +126,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // ignore if no permission
       }
 
+      // Make sure totals are consistent immediately after reset
+      try {
+        update_session_totals($conn, 1);
+      } catch (Throwable $e) {
+        // ignore
+      }
+
       header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . '?started=1');
       exit;
     } catch (mysqli_sql_exception $e) {
@@ -121,27 +142,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
-  // Start voting button
-  if (isset($_POST['start_voting'])) {
-    try {
-      // If your DB is using a single row (id=1) mode, use the reset/start button instead.
-      // This path inserts a new session row (requires fields: h_alguse_aeg, kokku_arv, poolt_arv, vastu_arv).
-      $stmt = $conn->prepare('INSERT INTO TULEMUSED (h_alguse_aeg, kokku_arv, poolt_arv, vastu_arv) VALUES (NOW(), 0, 0, 0)');
-      $stmt->execute();
-      $stmt->close();
-
-  // Use PRG (Post/Redirect/Get) so the page reloads with fresh session state
-  // and the timer starts immediately without any stale state/caching.
-  header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . '?started=1');
-  exit;
-    } catch (mysqli_sql_exception $e) {
-      // Show a helpful DB error (does not include credentials).
-      // Common causes: missing INSERT permission, table/column mismatch.
-      $flash = ['type' => 'error', 'message' => 'Hääletuse alustamine ebaõnnestus: ' . $e->getMessage()];
-    } catch (Throwable $e) {
-      $flash = ['type' => 'error', 'message' => 'Hääletuse alustamine ebaõnnestus.' ];
-    }
-  } else {
+  // Voting submit
+  if (isset($_POST['submit_haal']) || isset($_POST['voter_id'])) {
     $voterId = filter_input(INPUT_POST, 'voter_id', FILTER_VALIDATE_INT);
     $otsusRaw = (string)($_POST['otsus'] ?? '');
     $otsus = in_array($otsusRaw, ['poolt', 'vastu'], true) ? $otsusRaw : null;
@@ -162,7 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $old = $row['otsus'] ?? null;
             $stmt->close();
 
-            // Update vote
+            // Update vote (do NOT reset other votes here; reset only happens on start)
             $stmt = $conn->prepare('UPDATE HAALETUS SET otsus = ? WHERE id = ?');
             $stmt->bind_param('si', $otsus, $voterId);
             $stmt->execute();
@@ -181,10 +183,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $flash = ['type' => 'success', 'message' => 'Hääl salvestatud.'];
 
       // Keep TULEMUSED in sync for the live scoreboard
-      if ($session && isset($session['id'])) {
+    if ($sessionActive) {
         try {
-          // This keeps phpMyAdmin view consistent even when someone changes their vote.
-          update_session_totals($conn, (int)$session['id']);
+      // This keeps phpMyAdmin view consistent even when someone changes their vote.
+      update_session_totals($conn, 1);
         } catch (Throwable $e) {
           // ignore
         }
@@ -281,7 +283,7 @@ if (!$flash && isset($_GET['started'])) {
         </form>
       </div>
 
-      <form method="post" action="">
+  <form method="post" action="">
         <div class="row">
           <div>
             <label for="voter_id">Hääletaja</label>
@@ -321,7 +323,7 @@ if (!$flash && isset($_GET['started'])) {
         </div>
 
         <div class="actions">
-          <button type="submit" <?= $sessionActive ? '' : 'disabled' ?>>Salvesta hääl</button>
+          <button type="submit" name="submit_haal" value="1" <?= $sessionActive ? '' : 'disabled' ?>>Salvesta hääl</button>
           <span class="small">Andmed salvestatakse tabelisse `HAALETUS`.</span>
         </div>
 
@@ -409,7 +411,7 @@ if (!$flash && isset($_GET['started'])) {
           // Session ended: show 00:00 and disable voting until refresh.
           const buttons = document.querySelectorAll('form button[type="submit"]');
           buttons.forEach((b) => {
-            if (b.name !== 'start_voting') b.disabled = true;
+            if (b.name !== 'alusta_uuesti') b.disabled = true;
           });
         } else {
           setTimeout(tick, 250);
